@@ -502,6 +502,7 @@ class SaveSVGNode(IO.ComfyNode):
             ],
             hidden=[IO.Hidden.prompt, IO.Hidden.extra_pnginfo],
             is_output_node=True,
+            outputs=[IO.SVG.Output("svg")],
         )
 
     @classmethod
@@ -551,9 +552,7 @@ class SaveSVGNode(IO.ComfyNode):
 
             results.append(UI.SavedResult(filename=file, subfolder=subfolder, type=IO.FolderType.output))
             counter += 1
-        return IO.NodeOutput(ui={"images": results})
-
-    save_svg = execute  # TODO: remove
+        return IO.NodeOutput(svg, ui={"images": results})
 
 
 class GetImageSize(IO.ComfyNode):
