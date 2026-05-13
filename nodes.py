@@ -488,7 +488,8 @@ class SaveLatent:
                               "filename_prefix": ("STRING", {"default": "latents/ComfyUI"})},
                 "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("samples",)
     FUNCTION = "save"
 
     OUTPUT_NODE = True
@@ -526,7 +527,7 @@ class SaveLatent:
         output["latent_format_version_0"] = torch.tensor([])
 
         comfy.utils.save_torch_file(output, file, metadata=metadata)
-        return { "ui": { "latents": results } }
+        return { "ui": { "latents": results }, "result": (samples,) }
 
 
 class LoadLatent:
