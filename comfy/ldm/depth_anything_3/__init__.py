@@ -1,4 +1,4 @@
-# Depth Anything 3 - native ComfyUI port (Apache-2.0 monocular variants only).
+# Depth Anything 3 - native ComfyUI port (Apache-2.0).
 #
 # Supported variants:
 #   DA3-Small, DA3-Base                (vits/vitb backbone, DualDPT head)

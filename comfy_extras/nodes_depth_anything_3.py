@@ -92,7 +92,7 @@ def _da3_get_extrinsic(geometry: dict, b: int) -> torch.Tensor | None:
 def _da3_apply_extrinsic(points_cam: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
     """Transform (H,W,3) OpenCV camera-space points to world space.
 
-    E is the world-to-camera SE(3) matrix (3×4 or 4×4).  The camera-to-world
+    E is the world-to-camera SE(3) matrix (3×4 or 4×4). The camera-to-world
     inverse is computed analytically as [Rᵀ | −Rᵀt] rather than via
     torch.linalg.inv to avoid numerical failures on near-degenerate poses.
 
@@ -297,10 +297,10 @@ class DA3Inference(io.ComfyNode):
 
         if not has_cam_dec and not has_dualdpt:
             raise ValueError(
-                "multiview mode requires Small or Base model. The loaded model "
+                "multi-view mode requires Small or Base model. The loaded model "
                 f"(head_type='{diffusion.head_type}') does not support cross-view "
                 "attention or camera pose estimation. Switch mode to 'mono', or "
-                "load Small or Base model for multiview."
+                "load Small or Base model for mult-view."
             )
 
         if pose_method == "cam_dec" and not has_cam_dec:
@@ -526,7 +526,7 @@ class DA3GeometryToMesh(io.ComfyNode):
             inputs=[
                 DA3Geometry.Input("da3_geometry"),
                 io.Int.Input("batch_index", default=0, min=0, max=4096,
-                             tooltip="Which image of a batched DA3_GEOMETRY to mesh. "
+                             tooltip="Which image of a batch to convert. "
                                      "Per-image vertex counts differ so batches cannot be stacked."),
                 io.Int.Input("decimation", default=1, min=1, max=8,
                              tooltip="Vertex stride; 1 = full resolution, 2 = half, etc."),
@@ -539,7 +539,7 @@ class DA3GeometryToMesh(io.ComfyNode):
                                  tooltip="Exclude sky-probability pixels (sky >= 0.5) from the mesh. "
                                          "Ignored when the geometry has no sky map (Small/Base models)."),
                 io.Boolean.Input("texture", default=True,
-                                 tooltip="Carry the source image through as the baseColor texture."),
+                                 tooltip="Use the source image as a base color texture."),
             ],
             outputs=[io.Mesh.Output()],
         )
@@ -624,11 +624,11 @@ class DA3GeometryToPointCloud(io.ComfyNode):
             search_aliases=["da3", "depth anything", "point cloud", "pointcloud", "3d", "geometry"],
             display_name="Convert DA3 Geometry to Point Cloud",
             category="image/geometry_estimation",
-            description="Unproject a DA3_GEOMETRY depth map into a 3D point cloud (DA3_POINT_CLOUD).",
+            description="Convert a depth map into a 3D point cloud.",
             inputs=[
                 DA3Geometry.Input("da3_geometry"),
                 io.Int.Input("batch_index", default=0, min=0, max=4096,
-                             tooltip="Which image of a batched DA3_GEOMETRY to convert."),
+                             tooltip="Which image of a batch to convert."),
                 io.Float.Input("confidence_threshold", default=0.1, min=0.0, max=1.0, step=0.01,
                                tooltip="Exclude pixels whose per-image normalised confidence is below this value (0 = keep all). "
                                        "Ignored when the geometry has no confidence map."),
