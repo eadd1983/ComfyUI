@@ -45,6 +45,8 @@ def test_upload_ok_duplicate_reference(http: requests.Session, api_base: str, ma
     assert a2["asset_hash"] == a1["asset_hash"]
     assert a2["hash"] == a1["hash"]
     assert a2["id"] != a1["id"]  # new reference with same content
+    assert a2.get("file_path") is None
+    assert a2.get("display_name") is None
 
     # Third upload with the same data but different name also creates new AssetReference
     files = {"file": (name, data, "application/octet-stream")}
@@ -55,6 +57,8 @@ def test_upload_ok_duplicate_reference(http: requests.Session, api_base: str, ma
     assert a3["asset_hash"] == a1["asset_hash"]
     assert a3["id"] != a1["id"]
     assert a3["id"] != a2["id"]
+    assert a3.get("file_path") is None
+    assert a3.get("display_name") is None
 
 
 def test_upload_fastpath_from_existing_hash_no_file(http: requests.Session, api_base: str):
@@ -88,6 +92,49 @@ def test_upload_fastpath_from_existing_hash_no_file(http: requests.Session, api_
     assert "checkpoints" in b2["tags"]
     assert "uploaded" not in b2["tags"]
     assert not any(tag.startswith("model_type:") for tag in b2["tags"])
+    assert b2.get("file_path") is None
+    assert b2.get("display_name") is None
+
+    rg = http.get(f"{api_base}/api/assets/{b2['id']}", timeout=120)
+    detail = rg.json()
+    assert rg.status_code == 200, detail
+    assert detail.get("file_path") is None
+    assert detail.get("display_name") is None
+
+
+def test_create_from_hash_with_model_tags_does_not_synthesize_file_path(
+    http: requests.Session, api_base: str
+):
+    seed_name = "from_hash_seed.safetensors"
+    seed_tags = ["models", "model_type:checkpoints", "unit-tests"]
+    files = {"file": (seed_name, b"D" * 1024, "application/octet-stream")}
+    form = {
+        "tags": json.dumps(seed_tags),
+        "name": seed_name,
+        "user_metadata": json.dumps({}),
+    }
+    seed_r = http.post(api_base + "/api/assets", data=form, files=files, timeout=120)
+    seed = seed_r.json()
+    assert seed_r.status_code == 201, seed
+
+    payload = {
+        "hash": seed["asset_hash"],
+        "name": "from_hash_copy.safetensors",
+        "tags": ["models", "model_type:checkpoints", "unit-tests", "spoofed"],
+    }
+    created_r = http.post(api_base + "/api/assets/from-hash", json=payload, timeout=120)
+    created = created_r.json()
+    assert created_r.status_code == 201, created
+    assert created["created_new"] is False
+    assert created["asset_hash"] == seed["asset_hash"]
+    assert created.get("file_path") is None
+    assert created.get("display_name") is None
+
+    detail_r = http.get(f"{api_base}/api/assets/{created['id']}", timeout=120)
+    detail = detail_r.json()
+    assert detail_r.status_code == 200, detail
+    assert detail.get("file_path") is None
+    assert detail.get("display_name") is None
 
 
 def test_upload_fastpath_with_known_hash_and_file(
@@ -147,6 +194,8 @@ def test_duplicate_byte_upload_is_reference_only_and_does_not_need_destination(
     assert "not-a-destination" in duplicate["tags"]
     assert "uploaded" not in duplicate["tags"]
     assert "input" not in duplicate["tags"]
+    assert duplicate.get("file_path") is None
+    assert duplicate.get("display_name") is None
 
 
 def test_upload_multiple_tags_fields_are_merged(http: requests.Session, api_base: str):
@@ -168,6 +217,69 @@ def test_upload_multiple_tags_fields_are_merged(http: requests.Session, api_base
     assert rg.status_code == 200, detail
     tags = set(detail["tags"])
     assert {"models", "model_type:checkpoints", "unit-tests", "alpha"}.issubset(tags)
+
+
+@pytest.mark.parametrize(
+    ("tags", "extension", "subfolder", "expected_prefix", "expected_display_prefix"),
+    [
+        (["input", "unit-tests"], ".png", "uploads", "input", ""),
+        (
+            ["models", "model_type:checkpoints", "unit-tests"],
+            ".safetensors",
+            "flux",
+            "models/checkpoints",
+            "checkpoints/",
+        ),
+    ],
+)
+def test_upload_response_includes_file_path_and_display_name(
+    tags: list[str],
+    extension: str,
+    subfolder: str,
+    expected_prefix: str,
+    expected_display_prefix: str,
+    http: requests.Session,
+    api_base: str,
+    make_asset_bytes,
+):
+    scope = f"response-paths-{uuid.uuid4().hex[:6]}"
+    scoped_tags = [*tags, scope]
+    name = f"asset_response_path{extension}"
+
+    files = {"file": (name, make_asset_bytes(name, 1024), "application/octet-stream")}
+    form = {
+        "tags": json.dumps(scoped_tags),
+        "name": name,
+        "user_metadata": json.dumps({}),
+        "subfolder": subfolder,
+    }
+    created_r = http.post(api_base + "/api/assets", data=form, files=files, timeout=120)
+    created = created_r.json()
+    assert created_r.status_code in (200, 201), created
+    stored_filename = get_asset_filename(created["asset_hash"], extension)
+    expected_suffix = f"{subfolder}/{stored_filename}"
+    expected_file_path = f"{expected_prefix}/{expected_suffix}"
+    expected_display_name = f"{expected_display_prefix}{expected_suffix}"
+
+    assert created["file_path"] == expected_file_path
+    assert created["display_name"] == expected_display_name
+
+    detail_r = http.get(f"{api_base}/api/assets/{created['id']}", timeout=120)
+    detail = detail_r.json()
+    assert detail_r.status_code == 200, detail
+    assert detail["file_path"] == expected_file_path
+    assert detail["display_name"] == expected_display_name
+
+    list_r = http.get(
+        api_base + "/api/assets",
+        params={"include_tags": f"unit-tests,{scope}", "limit": "50"},
+        timeout=120,
+    )
+    listed = list_r.json()
+    assert list_r.status_code == 200, listed
+    match = next(a for a in listed["assets"] if a["id"] == created["id"])
+    assert match["file_path"] == expected_file_path
+    assert match["display_name"] == expected_display_name
 
 
 @pytest.mark.parametrize("root", ["input", "output"])

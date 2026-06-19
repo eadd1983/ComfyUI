@@ -88,12 +88,71 @@ def validate_path_within_base(candidate: str, base: str) -> None:
         raise ValueError("destination escapes base directory")
 
 
+def _compute_relative_path(child: str, parent: str) -> str:
+    rel = os.path.relpath(os.path.abspath(child), os.path.abspath(parent))
+    if rel == ".":
+        return ""
+    return rel.replace(os.sep, "/")
+
+
+def _is_relative_to(child: str, parent: str) -> bool:
+    return Path(os.path.abspath(child)).is_relative_to(os.path.abspath(parent))
+
+
+def compute_asset_response_paths(file_path: str) -> tuple[str, str | None] | None:
+    """Return public (file_path, display_name) response fields for a file path.
+
+    These fields are storage locators, not model-loader namespaces. Registered
+    model-folder membership is represented by backend tags such as
+    ``model_type:<folder_name>``; response paths only use known storage roots.
+    """
+    fp_abs = os.path.abspath(file_path)
+    candidates: list[tuple[int, int, str, str]] = []
+
+    for order, (namespace, base) in enumerate(
+        (
+            ("input", folder_paths.get_input_directory()),
+            ("output", folder_paths.get_output_directory()),
+            ("temp", folder_paths.get_temp_directory()),
+            ("models", getattr(folder_paths, "models_dir", "")),
+        )
+    ):
+        if not base:
+            continue
+        base_abs = os.path.abspath(base)
+        if _is_relative_to(fp_abs, base_abs):
+            candidates.append((len(base_abs), -order, namespace, base_abs))
+
+    if not candidates:
+        return None
+
+    _base_len, _order, namespace, base = max(candidates)
+    rel = _compute_relative_path(fp_abs, base)
+    public_path = f"{namespace}/{rel}" if rel else namespace
+    return public_path, rel or None
+
+
+def compute_display_name(file_path: str) -> str | None:
+    """Return the asset's `display_name`, or None for unknown paths."""
+    result = compute_asset_response_paths(file_path)
+    return result[1] if result else None
+
+
+def compute_file_path(file_path: str) -> str | None:
+    """Return the asset's logical storage `file_path`, or None for unknown paths."""
+    result = compute_asset_response_paths(file_path)
+    return result[0] if result else None
+
+
 def compute_relative_filename(file_path: str) -> str | None:
     """
     Return the model's path relative to the last well-known folder (the model category),
     using forward slashes, eg:
       /.../models/checkpoints/flux/123/flux.safetensors -> "flux/123/flux.safetensors"
       /.../models/text_encoders/clip_g.safetensors -> "clip_g.safetensors"
+
+    This is legacy metadata/view filename logic, not the public Asset response
+    `display_name`. Response fields should use compute_asset_response_paths().
 
     For non-model paths, returns None.
     """
@@ -139,9 +198,10 @@ def get_asset_category_and_relative_path(
     def _compute_relative(child: str, parent: str) -> str:
         # Normalize relative path, stripping any leading ".." components
         # by anchoring to root (os.sep) then computing relpath back from it.
-        return os.path.relpath(
+        rel = os.path.relpath(
             os.path.join(os.sep, os.path.relpath(child, parent)), os.sep
         )
+        return "" if rel == "." else rel.replace(os.sep, "/")
 
     # 1) input
     input_base = os.path.abspath(folder_paths.get_input_directory())
@@ -172,7 +232,8 @@ def get_asset_category_and_relative_path(
     if best is not None:
         _, bucket, rel_inside = best
         combined = os.path.join(bucket, rel_inside)
-        return "models", os.path.relpath(os.path.join(os.sep, combined), os.sep)
+        normalized = os.path.relpath(os.path.join(os.sep, combined), os.sep)
+        return "models", normalized.replace(os.sep, "/")
 
     raise ValueError(
         f"Path is not within input, output, temp, or configured model bases: {file_path}"
