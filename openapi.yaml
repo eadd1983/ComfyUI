@@ -2432,6 +2432,9 @@ paths:
                                     supports_preview_metadata:
                                         description: Whether the server supports preview metadata
                                         type: boolean
+                                    supports_model_type_tags:
+                                        description: Whether the server supports namespaced model type asset tags
+                                        type: boolean
                                 type: object
                     description: Success
                     headers:
