@@ -1296,6 +1296,7 @@ class DynamicGroup(ComfyTypeI):
             tooltip: str = None,
             lazy: bool = None,
             extra_dict=None,
+            group_name: str = "Group",
         ):
             super().__init__(id, display_name, optional, tooltip, lazy, extra_dict)
             # Validate template entries: only WidgetInput subclasses, no nesting
@@ -1331,6 +1332,7 @@ class DynamicGroup(ComfyTypeI):
             self.template = template
             self.min = min
             self.max = max
+            self.group_name = group_name
 
         def get_all(self) -> list["Input"]:
             return [self] + list(self.template)
@@ -1340,6 +1342,7 @@ class DynamicGroup(ComfyTypeI):
                 "template": create_input_dict_v1(self.template),
                 "min": self.min,
                 "max": self.max,
+                "group_name": self.group_name,
             })
 
         def validate(self):
