@@ -306,6 +306,87 @@ def test_list_assets_invalid_query_rejected(http: requests.Session, api_base: st
     assert body["error"]["code"] == error_code
 
 
+def test_list_assets_display_name_emitted(http, api_base, asset_factory, make_asset_bytes):
+    """`display_name` is emitted for every populated asset and is derived from
+    the storage path (it ends with the stored filename)."""
+    scope = f"lf-dispname-{uuid.uuid4().hex[:6]}"
+    tags = ["models", "checkpoints", "unit-tests", scope]
+    asset_factory("dn_a.safetensors", tags, {}, make_asset_bytes("dn_a", 700))
+    asset_factory("dn_b.safetensors", tags, {}, make_asset_bytes("dn_b", 700))
+
+    r = http.get(
+        api_base + "/api/assets",
+        params={"include_tags": f"unit-tests,{scope}", "limit": "50"},
+        timeout=120,
+    )
+    body = r.json()
+    assert r.status_code == 200, body
+    assert body["assets"], "expected at least one asset"
+    for asset in body["assets"]:
+        assert "display_name" in asset, "populated asset must emit display_name"
+        assert asset["display_name"], "stored asset must have a path-derived display_name"
+        assert asset["display_name"].endswith(asset["name"])
+
+
+def test_list_assets_hash_filter_exact_match(http, api_base, asset_factory, make_asset_bytes):
+    """`hash` filters to assets whose content hash matches exactly."""
+    scope = f"lf-hash-{uuid.uuid4().hex[:6]}"
+    tags = ["models", "checkpoints", "unit-tests", scope]
+    a = asset_factory("hf_a.safetensors", tags, {}, make_asset_bytes("hf_a", 1024))
+    b = asset_factory("hf_b.safetensors", tags, {}, make_asset_bytes("hf_b", 2048))
+
+    target = a["hash"]
+    assert target and a["hash"] != b["hash"], "fixtures must have distinct content hashes"
+
+    r = http.get(
+        api_base + "/api/assets",
+        params={"hash": target, "limit": "50"},
+        timeout=120,
+    )
+    body = r.json()
+    assert r.status_code == 200, body
+    names = [x["name"] for x in body["assets"]]
+    assert names == [a["name"]]
+    assert body["total"] == 1
+
+
+def test_list_assets_hash_filter_no_match(http, api_base, asset_factory, make_asset_bytes):
+    """A well-formed but unknown hash returns an empty page (200)."""
+    scope = f"lf-hash-none-{uuid.uuid4().hex[:6]}"
+    tags = ["models", "checkpoints", "unit-tests", scope]
+    asset_factory("hn_a.safetensors", tags, {}, make_asset_bytes("hn_a", 800))
+
+    unknown = "blake3:" + ("0" * 64)
+    r = http.get(
+        api_base + "/api/assets",
+        params={"hash": unknown, "limit": "50"},
+        timeout=120,
+    )
+    body = r.json()
+    assert r.status_code == 200, body
+    assert body["assets"] == []
+    assert body["total"] == 0
+
+
+def test_list_assets_include_public_accepted(http, api_base, asset_factory, make_asset_bytes):
+    """`include_public` is accepted for contract parity; core results are always
+    the caller's own assets regardless of its value (the param is inert)."""
+    scope = f"lf-incpub-{uuid.uuid4().hex[:6]}"
+    tags = ["models", "checkpoints", "unit-tests", scope]
+    a = asset_factory("ip_a.safetensors", tags, {}, make_asset_bytes("ip_a", 900))
+
+    for value in ("false", "true"):
+        r = http.get(
+            api_base + "/api/assets",
+            params={"include_tags": f"unit-tests,{scope}", "include_public": value, "limit": "50"},
+            timeout=120,
+        )
+        body = r.json()
+        assert r.status_code == 200, body
+        names = [x["name"] for x in body["assets"]]
+        assert a["name"] in names, f"caller's own asset must be returned (include_public={value})"
+
+
 def test_list_assets_name_contains_literal_underscore(
     http,
     api_base,

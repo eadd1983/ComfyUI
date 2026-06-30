@@ -54,6 +54,16 @@ class ListAssetsQuery(BaseModel):
     exclude_tags: list[str] = Field(default_factory=list)
     name_contains: str | None = None
 
+    # Filter to assets whose content hash matches exactly. Param name is `hash`
+    # per the projected openapi.yaml listAssets contract (the response-body field
+    # is `asset_hash`; the query param is `hash`).
+    hash: str | None = None
+
+    # Declared for cloud/core contract parity. Core has no public asset pool, so
+    # this is inert: results are always the caller's own assets. Accepted (not
+    # rejected) so the FE needs no isCloud branch.
+    include_public: bool = True
+
     # Accept either a JSON string (query param) or a dict
     metadata_filter: dict[str, Any] | None = None
 
@@ -84,6 +94,17 @@ class ListAssetsQuery(BaseModel):
                 if isinstance(item, str):
                     out.extend([t.strip() for t in item.split(",") if t.strip()])
             return out
+        return v
+
+    @field_validator("hash", mode="before")
+    @classmethod
+    def _normalize_hash(cls, v):
+        # Normalize for an exact match against stored hashes (which are
+        # lowercase `blake3:<hex>`). Liberal in what we accept — no pattern
+        # enforcement; a non-matching value simply yields an empty page.
+        if isinstance(v, str):
+            v = v.strip().lower()
+            return v or None
         return v
 
     @field_validator("metadata_filter", mode="before")
