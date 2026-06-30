@@ -31,6 +31,11 @@ class JobStatus:
     ALL = [PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED]
 
 
+# Maximum number of ids accepted by the `ids` filter on the jobs listing.
+# Bounds the work a single batch-poll request can ask for.
+MAX_JOB_IDS_FILTER = 100
+
+
 def validate_job_id(value) -> str:
     """Validate a client-supplied job (prompt) id.
 
@@ -362,6 +367,7 @@ def get_all_jobs(
     history: dict,
     status_filter: Optional[list[str]] = None,
     workflow_id: Optional[str] = None,
+    ids: Optional[list[str]] = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
     limit: Optional[int] = None,
@@ -376,6 +382,7 @@ def get_all_jobs(
         history: Dict of history items keyed by prompt_id
         status_filter: List of statuses to include (from JobStatus.ALL)
         workflow_id: Filter by workflow ID
+        ids: Restrict the result to these job ids (None/empty = no filter)
         sort_by: Field to sort by ('created_at', 'execution_duration')
         sort_order: 'asc' or 'desc'
         limit: Maximum number of items to return
@@ -407,6 +414,10 @@ def get_all_jobs(
 
     if workflow_id:
         jobs = [j for j in jobs if j.get('workflow_id') == workflow_id]
+
+    if ids:
+        id_set = set(ids)
+        jobs = [j for j in jobs if j['id'] in id_set]
 
     jobs = apply_sorting(jobs, sort_by, sort_order)
 

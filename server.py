@@ -16,6 +16,7 @@ from comfy_execution.jobs import (
     cancel_job,
     CANCEL_PENDING,
     CANCEL_RUNNING,
+    MAX_JOB_IDS_FILTER,
 )
 import uuid
 import urllib
@@ -791,6 +792,7 @@ class PromptServer():
             Query parameters:
                 status: Filter by status (comma-separated): pending, in_progress, completed, failed
                 workflow_id: Filter by workflow ID
+                ids: Filter by job id (comma-separated UUIDs, max 100)
                 sort_by: Sort field: created_at (default), execution_duration
                 sort_order: Sort direction: asc, desc (default)
                 limit: Max items to return (positive integer)
@@ -800,6 +802,7 @@ class PromptServer():
 
             status_param = query.get('status')
             workflow_id = query.get('workflow_id')
+            ids_param = query.get('ids')
             sort_by = query.get('sort_by', 'created_at').lower()
             sort_order = query.get('sort_order', 'desc').lower()
 
@@ -810,6 +813,30 @@ class PromptServer():
                 if invalid_statuses:
                     return web.json_response(
                         {"error": f"Invalid status value(s): {', '.join(invalid_statuses)}. Valid values: {', '.join(JobStatus.ALL)}"},
+                        status=400
+                    )
+
+            # Optional batch filter: narrow the result to a known set of job ids
+            # (e.g. polling a submitted batch in one request). Absent/empty means
+            # no filter. Cap the count before validating the full list so an
+            # oversized request fails fast, then reject any malformed id with 400.
+            ids_filter = None
+            if ids_param:
+                ids_filter = [i.strip() for i in ids_param.split(',') if i.strip()]
+                if len(ids_filter) > MAX_JOB_IDS_FILTER:
+                    return web.json_response(
+                        {"error": f"ids must contain at most {MAX_JOB_IDS_FILTER} values"},
+                        status=400
+                    )
+                invalid_ids = []
+                for jid in ids_filter:
+                    try:
+                        validate_job_id(jid)
+                    except (ValueError, AttributeError):
+                        invalid_ids.append(jid)
+                if invalid_ids:
+                    return web.json_response(
+                        {"error": "ids contains invalid id(s)", "invalid_ids": invalid_ids},
                         status=400
                     )
 
@@ -864,6 +891,7 @@ class PromptServer():
                 running, queued, history,
                 status_filter=status_filter,
                 workflow_id=workflow_id,
+                ids=ids_filter,
                 sort_by=sort_by,
                 sort_order=sort_order,
                 limit=limit,
