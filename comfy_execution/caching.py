@@ -1,5 +1,6 @@
 import asyncio
 import bisect
+import gc
 import itertools
 import psutil
 import time
@@ -8,7 +9,6 @@ from typing import Sequence, Mapping, Dict
 from comfy.model_patcher import ModelPatcher
 from comfy_execution.graph import DynamicPrompt
 from abc import ABC, abstractmethod
-import gc
 
 import nodes
 
@@ -529,6 +529,38 @@ class RAMPressureCache(LRUCache):
         if psutil.virtual_memory().available >= target:
             return
 
+        def remove_cache_key(key):
+            del self.cache[key]
+            self.used_generation.pop(key, None)
+            self.timestamps.pop(key, None)
+            self.children.pop(key, None)
+
+        def has_old_model_patcher(outputs):
+            if outputs is None:
+                return False
+            for output in outputs:
+                if isinstance(output, (list, tuple)):
+                    if has_old_model_patcher(output):
+                        return True
+                elif isinstance(output, ModelPatcher):
+                    return True
+            return False
+
+        old_modelpatcher_keys = []
+        for key, cache_entry in self.cache.items():
+            if self.used_generation[key] == self.generation:
+                continue
+            if has_old_model_patcher(cache_entry.outputs):
+                old_modelpatcher_keys.append(key)
+
+        for key in old_modelpatcher_keys:
+            remove_cache_key(key)
+
+        if old_modelpatcher_keys:
+            gc.collect()
+            if psutil.virtual_memory().available >= target:
+                return
+
         clean_list = []
 
         for key, cache_entry in self.cache.items():
@@ -546,9 +578,6 @@ class RAMPressureCache(LRUCache):
                         scan_list_for_ram_usage(output)
                     elif isinstance(output, torch.Tensor) and output.device.type == 'cpu':
                         ram_usage += output.numel() * output.element_size()
-                    elif isinstance(output, ModelPatcher) and self.used_generation[key] != self.generation:
-                        #old ModelPatchers are the first to go
-                        ram_usage = 1e30
             scan_list_for_ram_usage(cache_entry.outputs)
 
             oom_score *= ram_usage
@@ -558,11 +587,8 @@ class RAMPressureCache(LRUCache):
 
         to_free = target - psutil.virtual_memory().available
         while to_free > 0 and clean_list:
-            oom_score, _, ram_usage, key = clean_list.pop()
-            del self.cache[key]
-            self.used_generation.pop(key, None)
-            self.timestamps.pop(key, None)
-            self.children.pop(key, None)
+            _, _, ram_usage, key = clean_list.pop()
+            remove_cache_key(key)
             to_free -= ram_usage
 
         gc.collect()
