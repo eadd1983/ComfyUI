@@ -1,18 +1,3 @@
-"""LoRA stacking loaders built on io.DynamicGroup.
-
-Two nodes that let you stack any number of LoRAs in a single node, each row
-carrying only a LoRA name and a strength:
-
-  LoadLoraModel
-      Applies a stack of LoRAs to a diffusion MODEL.
-
-  LoadLoraTextEncoder
-      Applies a stack of LoRAs to a CLIP text encoder.
-
-Both are modelled on DynamicGroupLoraStyleTest in nodes_dynamic_group_test.py,
-but operate on real models and real LoRA files.
-"""
-
 from __future__ import annotations
 
 from typing_extensions import override
@@ -22,18 +7,10 @@ import comfy.utils
 import folder_paths
 from comfy_api.latest import ComfyExtension, io
 
-# Module-level cache so repeated executions don't re-read the same file from disk.
-_LORA_CACHE: dict[str, tuple] = {}
-
 
 def _load_lora_file(lora_name: str):
     lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
-    cached = _LORA_CACHE.get(lora_path)
-    if cached is not None:
-        return cached
-    lora, metadata = comfy.utils.load_torch_file(lora_path, safe_load=True, return_metadata=True)
-    _LORA_CACHE[lora_path] = (lora, metadata)
-    return lora, metadata
+    return comfy.utils.load_torch_file(lora_path, safe_load=True, return_metadata=True)
 
 
 def _lora_template() -> list[io.Input]:
