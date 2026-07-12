@@ -229,10 +229,6 @@ components:
                     default: false
                     description: Permit a non-model file extension (default only allows known model extensions).
                     type: boolean
-                credential_id:
-                    description: Explicit per-host credential to use; otherwise auto-resolved by host. Still subject to the per-hop host match.
-                    nullable: true
-                    type: string
                 expected_sha256:
                     description: Optional hub-provided SHA256 to verify the completed file against (fail-closed).
                     nullable: true
@@ -590,77 +586,26 @@ components:
             required:
                 - history
             type: object
-        HostCredentialUpsert:
-            description: Request body for upserting a per-host credential. The secret is write-only.
+        DownloadAuthProvider:
+            description: Per-provider download-auth status. Never includes a token.
             properties:
-                auth_scheme:
-                    default: bearer
-                    description: How the secret is attached to requests.
-                    enum:
-                        - bearer
-                        - header
-                        - query
-                    type: string
-                enabled:
-                    default: true
+                env_key_present:
+                    description: Whether an API key for this provider is set via an environment variable.
                     type: boolean
-                header_name:
-                    description: Header name when auth_scheme=header (defaults to Authorization).
-                    nullable: true
-                    type: string
-                host:
-                    description: Normalized hostname the key applies to (e.g. "civitai.com").
-                    type: string
-                label:
-                    description: User-friendly name for display.
-                    nullable: true
-                    type: string
-                match_subdomains:
-                    default: false
-                    description: Also match label-boundary subdomains of host (off by default; unsafe for hub CDNs).
+                logged_in:
+                    description: Whether a stored OAuth token exists for this provider.
                     type: boolean
-                query_param:
-                    description: Query parameter name when auth_scheme=query.
-                    nullable: true
-                    type: string
-                secret:
-                    description: The API key. Write-only — never returned by any endpoint.
+                login_in_progress:
+                    description: Whether an OAuth login flow is currently awaiting the browser callback.
+                    type: boolean
+                provider:
+                    description: Provider name (e.g. "huggingface", "civitai").
                     type: string
             required:
-                - host
-                - secret
-            type: object
-        HostCredentialView:
-            description: Masked, API-safe view of a stored credential. Never includes the secret.
-            properties:
-                auth_scheme:
-                    type: string
-                created_at:
-                    type: integer
-                enabled:
-                    type: boolean
-                header_name:
-                    nullable: true
-                    type: string
-                host:
-                    type: string
-                id:
-                    format: uuid
-                    type: string
-                label:
-                    nullable: true
-                    type: string
-                match_subdomains:
-                    type: boolean
-                query_param:
-                    nullable: true
-                    type: string
-                secret_last4:
-                    description: Last 4 characters of the secret, for masked display only.
-                    nullable: true
-                    type: string
-                updated_at:
-                    type: integer
+                - provider
+                - logged_in
+                - login_in_progress
+                - env_key_present
             type: object
         JobCancelResponse:
             description: Response for POST /api/jobs/{job_id}/cancel. Returned on both fresh cancels and idempotent no-ops.
@@ -2582,58 +2527,69 @@ paths:
             summary: Clear terminal downloads from history
             tags:
                 - download
-    /api/download/credentials:
+    /api/download/auth:
         get:
-            description: List stored per-host credentials. Secrets are never returned; only masked metadata (last 4 chars, scheme, label).
-            operationId: listDownloadCredentials
+            description: Per-provider download-auth status (OAuth login state + env-key presence). Never returns a token.
+            operationId: getDownloadAuth
             responses:
                 "200":
                     content:
                         application/json:
                             schema:
                                 properties:
-                                    credentials:
+                                    providers:
                                         items:
-                                            $ref: '#/components/schemas/HostCredentialView'
+                                            $ref: '#/components/schemas/DownloadAuthProvider'
                                         type: array
                                 type: object
-                    description: Masked credential list
-            summary: List host credentials (masked)
+                    description: Per-provider auth status
+            summary: Get download auth status
             tags:
                 - download
+    /api/download/auth/{provider}/login:
         post:
             description: |
-                Upsert (by host) a per-host API key used to authenticate downloads.
-                The secret is write-only: it is stored once here and never returned by any endpoint.
-            operationId: upsertDownloadCredential
-            requestBody:
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/HostCredentialUpsert'
+                Start an OAuth 2.0 PKCE login for a provider. Spawns a transient loopback
+                callback server and returns the authorize URL to open in a browser.
+            operationId: loginDownloadAuth
+            parameters:
+                - in: path
+                  name: provider
+                  required: true
+                  schema:
+                    type: string
             responses:
-                "201":
+                "200":
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/HostCredentialView'
-                    description: Credential stored (masked view returned)
+                                properties:
+                                    authorize_url:
+                                        type: string
+                                type: object
+                    description: Authorize URL to open in a browser
                 "400":
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
-                    description: Invalid credential
-            summary: Upsert a host credential
+                    description: Unknown provider or OAuth app not configured
+                "409":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                    description: A login for this provider is already in progress
+            summary: Start OAuth login for a provider
             tags:
                 - download
-    /api/download/credentials/{id}:
-        delete:
-            description: Delete a stored host credential.
-            operationId: deleteDownloadCredential
+    /api/download/auth/{provider}/logout:
+        post:
+            description: Clear the stored OAuth token (memory + on-disk file) for a provider.
+            operationId: logoutDownloadAuth
             parameters:
                 - in: path
-                  name: id
+                  name: provider
                   required: true
                   schema:
                     type: string
@@ -2643,42 +2599,17 @@ paths:
                         application/json:
                             schema:
                                 properties:
-                                    deleted:
+                                    logged_out:
                                         type: boolean
                                 type: object
-                    description: Deleted
-                "404":
+                    description: Token cleared
+                "400":
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
-                    description: No such credential
-            summary: Delete a host credential
-            tags:
-                - download
-        get:
-            description: Get a single host credential (masked; never includes the secret).
-            operationId: getDownloadCredential
-            parameters:
-                - in: path
-                  name: id
-                  required: true
-                  schema:
-                    type: string
-            responses:
-                "200":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/HostCredentialView'
-                    description: Masked credential
-                "404":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorResponse'
-                    description: No such credential
-            summary: Get a host credential (masked)
+                    description: Unknown provider
+            summary: Log out a provider
             tags:
                 - download
     /api/download/enqueue:

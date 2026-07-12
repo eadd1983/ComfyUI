@@ -1,10 +1,9 @@
 """SQLAlchemy models for the download manager.
 
-Three tables:
+Two tables:
 
 - ``downloads``         one row per requested file (job + queue state).
 - ``download_segments`` per-segment byte progress, for segmented resume.
-- ``host_credentials``  one API key per host, reused across downloads.
 
 On completion a finished file is registered into the assets catalog;
 ``downloads`` is kept only as job history.
@@ -64,13 +63,6 @@ class Download(Base):
     # Optional hub-provided checksum to verify against (NOT the dedup key).
     expected_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # Explicit credential override; otherwise auto-resolved by host.
-    # RESTRICT keeps a credential from being deleted while a download references it.
-    credential_id: Mapped[str | None] = mapped_column(
-        String(36),
-        ForeignKey("host_credentials.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
     allow_any_extension: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
@@ -89,10 +81,6 @@ class Download(Base):
         cascade="all,delete-orphan",
         passive_deletes=True,
         order_by="DownloadSegment.idx",
-    )
-
-    credential: Mapped[HostCredential | None] = relationship(
-        "HostCredential", back_populates="downloads"
     )
 
     __table_args__ = (
@@ -135,39 +123,3 @@ class DownloadSegment(Base):
             f"<DownloadSegment {self.download_id}#{self.idx} "
             f"{self.start_offset}-{self.end_offset} done={self.bytes_done}>"
         )
-
-
-class HostCredential(Base):
-    __tablename__ = "host_credentials"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    # Normalized lowercase hostname, e.g. "civitai.com".
-    host: Mapped[str] = mapped_column(String(255), nullable=False)
-    match_subdomains: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
-    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    auth_scheme: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="bearer"
-    )
-    header_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    query_param: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # The API key itself. Write-only over the API; never returned. See PRD 9.4.4.
-    secret: Mapped[str] = mapped_column(Text, nullable=False)
-    secret_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=_now)
-    updated_at: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=_now, onupdate=_now
-    )
-
-    downloads: Mapped[list[Download]] = relationship(
-        "Download", back_populates="credential"
-    )
-
-    __table_args__ = (
-        Index("uq_host_credentials_host", "host", unique=True),
-    )
-
-    def __repr__(self) -> str:
-        return f"<HostCredential id={self.id} host={self.host!r} scheme={self.auth_scheme}>"

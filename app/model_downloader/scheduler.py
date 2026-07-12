@@ -124,7 +124,6 @@ class Scheduler:
             dest_path=row.dest_path,
             temp_path=row.temp_path,
             priority=row.priority,
-            credential_id=row.credential_id,
             expected_sha256=row.expected_sha256,
             allow_any_extension=row.allow_any_extension,
             etag=row.etag,

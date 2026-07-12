@@ -7,10 +7,9 @@ envelope used by ``app/assets/api/routes.py``:
   GET    /api/download
   POST   /api/download/availability
   POST   /api/download/clear
-  POST   /api/download/credentials
-  GET    /api/download/credentials
-  GET    /api/download/credentials/{id}
-  DELETE /api/download/credentials/{id}
+  GET    /api/download/auth
+  POST   /api/download/auth/{provider}/login
+  POST   /api/download/auth/{provider}/logout
   GET    /api/download/{id}
   DELETE /api/download/{id}
   POST   /api/download/{id}/pause
@@ -18,9 +17,9 @@ envelope used by ``app/assets/api/routes.py``:
   POST   /api/download/{id}/cancel
   POST   /api/download/{id}/priority
 
-Note on ordering: the static ``credentials`` routes are registered before the
-dynamic ``/api/download/{id}`` route so a request to ``.../credentials`` is not
-captured as ``id == "credentials"``.
+Note on ordering: the static ``auth`` routes are registered before the dynamic
+``/api/download/{id}`` route so a request to ``.../auth`` is not captured as
+``id == "auth"``.
 """
 
 from __future__ import annotations
@@ -31,10 +30,9 @@ from aiohttp import web
 from pydantic import BaseModel, ValidationError
 
 from app.model_downloader.api import schemas_in, schemas_out
-from app.model_downloader.credentials.store import (
-    CREDENTIAL_STORE,
-    CredentialValidationError,
-)
+from app.model_downloader.auth.oauth import LoginInProgress, OAuthNotConfigured
+from app.model_downloader.auth.providers import PROVIDERS
+from app.model_downloader.auth.store import AUTH_STORE
 from app.model_downloader.manager import DOWNLOAD_MANAGER, DownloadError
 
 ROUTES = web.RouteTableDef()
@@ -89,7 +87,6 @@ async def enqueue(request: web.Request) -> web.Response:
             priority=parsed.priority,
             expected_sha256=parsed.expected_sha256,
             allow_any_extension=parsed.allow_any_extension,
-            credential_id=parsed.credential_id,
         )
     except DownloadError as e:
         return _from_download_error(e)
@@ -115,50 +112,35 @@ async def clear(request: web.Request) -> web.Response:
     return _ok({"deleted": deleted})
 
 
-# ----- credentials (secrets are write-only) — must precede /{id} -----
+# ----- auth (OAuth login + env-key status) — must precede /{id} -----
 
 
-@ROUTES.post("/api/download/credentials")
-async def upsert_credential(request: web.Request) -> web.Response:
-    parsed = await _parse(request, schemas_in.CredentialUpsertRequest)
-    if isinstance(parsed, web.Response):
-        return parsed
+@ROUTES.get("/api/download/auth")
+async def auth_status(request: web.Request) -> web.Response:
+    return _ok({"providers": schemas_out.auth_status()})
+
+
+@ROUTES.post("/api/download/auth/{provider}/login")
+async def auth_login(request: web.Request) -> web.Response:
+    provider = PROVIDERS.get(request.match_info["provider"])
+    if provider is None:
+        return _error(400, "UNKNOWN_PROVIDER", "No such auth provider.")
     try:
-        view = await CREDENTIAL_STORE.upsert(
-            parsed.host,
-            parsed.secret,
-            auth_scheme=parsed.auth_scheme,
-            header_name=parsed.header_name,
-            query_param=parsed.query_param,
-            label=parsed.label,
-            match_subdomains=parsed.match_subdomains,
-            enabled=parsed.enabled,
-        )
-    except CredentialValidationError as e:
-        return _error(400, "INVALID_CREDENTIAL", str(e))
-    return _ok(schemas_out.credential_to_dict(view), status=201)
+        authorize_url = await AUTH_STORE.begin_login(provider)
+    except OAuthNotConfigured as e:
+        return _error(400, "OAUTH_NOT_CONFIGURED", str(e))
+    except LoginInProgress as e:
+        return _error(409, "LOGIN_IN_PROGRESS", str(e))
+    return _ok({"authorize_url": authorize_url})
 
 
-@ROUTES.get("/api/download/credentials")
-async def list_credentials(request: web.Request) -> web.Response:
-    views = await CREDENTIAL_STORE.list()
-    return _ok({"credentials": [schemas_out.credential_to_dict(v) for v in views]})
-
-
-@ROUTES.get("/api/download/credentials/{id}")
-async def get_credential(request: web.Request) -> web.Response:
-    view = await CREDENTIAL_STORE.get(request.match_info["id"])
-    if view is None:
-        return _error(404, "NOT_FOUND", "No such credential.")
-    return _ok(schemas_out.credential_to_dict(view))
-
-
-@ROUTES.delete("/api/download/credentials/{id}")
-async def delete_credential(request: web.Request) -> web.Response:
-    deleted = await CREDENTIAL_STORE.delete(request.match_info["id"])
-    if not deleted:
-        return _error(404, "NOT_FOUND", "No such credential.")
-    return _ok({"deleted": True})
+@ROUTES.post("/api/download/auth/{provider}/logout")
+async def auth_logout(request: web.Request) -> web.Response:
+    provider = PROVIDERS.get(request.match_info["provider"])
+    if provider is None:
+        return _error(400, "UNKNOWN_PROVIDER", "No such auth provider.")
+    AUTH_STORE.clear(provider.name)
+    return _ok({"logged_out": True})
 
 
 # ----- single download by id (dynamic; registered last) -----

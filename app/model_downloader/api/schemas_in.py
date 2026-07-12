@@ -10,8 +10,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.model_downloader.constants import AUTH_SCHEME_BEARER
-
 
 class EnqueueRequest(BaseModel):
     url: str
@@ -19,7 +17,6 @@ class EnqueueRequest(BaseModel):
     priority: int = 0
     expected_sha256: Optional[str] = None
     allow_any_extension: bool = False
-    credential_id: Optional[str] = None
 
     @field_validator("url")
     @classmethod
@@ -42,20 +39,8 @@ class AvailabilityRequest(BaseModel):
         return {k: url.strip() for k, url in v.items()}
 
 
-class CredentialUpsertRequest(BaseModel):
-    host: str
-    secret: str
-    auth_scheme: str = AUTH_SCHEME_BEARER
-    header_name: Optional[str] = None
-    query_param: Optional[str] = None
-    label: Optional[str] = None
-    match_subdomains: bool = False
-    enabled: bool = True
-
-
 __all__ = [
     "EnqueueRequest",
     "PriorityRequest",
     "AvailabilityRequest",
-    "CredentialUpsertRequest",
 ]

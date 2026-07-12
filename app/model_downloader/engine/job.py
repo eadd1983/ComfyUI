@@ -105,7 +105,6 @@ class JobSpec:
     dest_path: str
     temp_path: str
     priority: int = 0
-    credential_id: Optional[str] = None
     expected_sha256: Optional[str] = None
     allow_any_extension: bool = False
     etag: Optional[str] = None
@@ -188,7 +187,7 @@ class DownloadJob:
     # ----- probe + plan -----
 
     async def _probe_and_plan(self):
-        pr = await probe(self.spec.url, credential_id=self.spec.credential_id)
+        pr = await probe(self.spec.url)
         if not pr.ok:
             if pr.gated:
                 raise FatalError(gated_error_message(self.spec.url, pr))
@@ -341,7 +340,7 @@ class DownloadJob:
         if self._etag:
             headers["If-Range"] = self._etag
         async with open_validated(
-            "GET", self.spec.url, credential_id=self.spec.credential_id, headers=headers
+            "GET", self.spec.url, headers=headers
         ) as (resp, _final):
             if resp.status == 200:
                 # Server ignored the range -> remote changed / no resume support.
@@ -383,7 +382,7 @@ class DownloadJob:
             if self._etag:
                 headers["If-Range"] = self._etag
         async with open_validated(
-            "GET", self.spec.url, credential_id=self.spec.credential_id, headers=headers
+            "GET", self.spec.url, headers=headers
         ) as (resp, _final):
             if offset > 0 and resp.status == 200:
                 # Resume not honoured -> start over from the beginning. Truncate
@@ -432,8 +431,8 @@ class DownloadJob:
     def _raise_for_status(self, status: int) -> None:
         if status in (401, 403):
             raise FatalError(
-                f"{redact_url(self.spec.url)} returned {status}; add/update an API key for "
-                f"this host at /api/download/credentials."
+                f"{redact_url(self.spec.url)} returned {status}; authenticate this "
+                f"host via /api/download/auth or set its API key env var."
             )
         if status in _RETRYABLE_STATUSES:
             raise RetryableError(f"HTTP {status}")

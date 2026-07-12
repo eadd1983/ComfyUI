@@ -78,13 +78,12 @@ def _filename_from_response(
     return None
 
 
-async def probe(url: str, *, credential_id: Optional[str] = None) -> ProbeResult:
+async def probe(url: str) -> ProbeResult:
     """Probe ``url`` and return discovered metadata, failing soft."""
     try:
         async with open_validated(
             "GET",
             url,
-            credential_id=credential_id,
             headers={"Range": "bytes=0-0", "Accept-Encoding": "identity"},
             timeout=_PROBE_TIMEOUT,
         ) as (resp, final_url):
@@ -149,9 +148,10 @@ def gated_error_message(url: str, pr: ProbeResult) -> str:
             detail += "."
         return (
             f"{redacted} is a gated model — {detail} Request access on the model's "
-            f"page, add an API key for this host at /api/download/credentials, and retry."
+            f"page, authenticate this host via /api/download/auth (or set its API "
+            f"key env var), and retry."
         )
     return (
-        f"{redacted} requires authentication. Add an API key for this host at "
-        f"/api/download/credentials and retry."
+        f"{redacted} requires authentication. Authenticate this host via "
+        f"/api/download/auth or set its API key env var, and retry."
     )

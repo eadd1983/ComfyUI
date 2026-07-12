@@ -75,7 +75,6 @@ class DownloadManager:
         priority: int = 0,
         expected_sha256: Optional[str] = None,
         allow_any_extension: bool = False,
-        credential_id: Optional[str] = None,
     ) -> str:
         # Coarse gate first: host/scheme must be allowlisted, and any extension
         # present in the URL path must be a known model type. A URL whose path
@@ -98,7 +97,7 @@ class DownloadManager:
         # adopt the real extension from the response, forcing the stored
         # filename to match. Skipped when the caller opted into any extension.
         if not allow_any_extension and url_path_extension(url) == "":
-            resolved_ext = await self._resolve_extension(url, credential_id)
+            resolved_ext = await self._resolve_extension(url)
             model_id = paths.apply_extension(model_id, resolved_ext)
 
         try:
@@ -137,7 +136,6 @@ class DownloadManager:
                     "status": DownloadStatus.QUEUED,
                     "priority": priority,
                     "expected_sha256": expected_sha256,
-                    "credential_id": credential_id,
                     "allow_any_extension": allow_any_extension,
                 },
             )
@@ -145,18 +143,16 @@ class DownloadManager:
         await self._scheduler.pump()
         return download_id
 
-    async def _resolve_extension(
-        self, url: str, credential_id: Optional[str]
-    ) -> str:
+    async def _resolve_extension(self, url: str) -> str:
         """Follow ``url`` to its final response and return the real extension.
 
         Used for allowlisted URLs whose path has no extension (e.g. Civitai
         download endpoints): the filename lives in the ``Content-Disposition``
         header or the post-redirect URL. Raises :class:`DownloadError` when the
-        URL can't be resolved, needs credentials, or resolves to something that
-        is not a known model file — so we never persist a bogus destination.
+        URL can't be resolved, needs authentication, or resolves to something
+        that is not a known model file — so we never persist a bogus destination.
         """
-        pr = await probe(url, credential_id=credential_id)
+        pr = await probe(url)
         if not pr.ok:
             if pr.gated:
                 raise DownloadError(

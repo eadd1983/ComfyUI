@@ -2,9 +2,9 @@
 
 Automatic redirects are disabled. We follow hops ourselves
 so that on *every* hop we (a) re-validate scheme + reject credentials-in-URL,
-(b) recompute which stored credential — if any — applies to that hop's host,
-and (c) let the connector's resolver screen the IP. This is the single place
-that attaches credentials, so a token can never ride a redirect to a CDN host.
+(b) recompute which auth — if any — applies to that hop's host, and (c) let the
+connector's resolver screen the IP. This is the single place that attaches a
+token, so it can never ride a redirect to a CDN host.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
-from app.model_downloader.credentials.resolver import resolve_auth_for_hop
+from app.model_downloader.auth.resolver import resolve_auth_for_hop
 from app.model_downloader.net.session import get_session
 from app.model_downloader.security.ssrf import (
     MAX_REDIRECTS,
@@ -78,7 +78,6 @@ def filename_from_content_disposition(value: Optional[str]) -> Optional[str]:
 async def _resolve_final_response(
     method: str,
     url: str,
-    credential_id: Optional[str],
     base_headers: dict[str, str],
     timeout: aiohttp.ClientTimeout,
 ) -> tuple[aiohttp.ClientResponse, str]:
@@ -93,18 +92,14 @@ async def _resolve_final_response(
     while True:
         check_redirect_hop(current, is_initial_url=(hops == 0))
         parts = urlsplit(current)
-        auth = await resolve_auth_for_hop(
-            parts.hostname or "", parts.scheme, explicit_credential_id=credential_id
-        )
+        auth = await resolve_auth_for_hop(parts.hostname or "", parts.scheme)
         req_headers = dict(base_headers)
-        req_url = current
         if auth is not None:
             req_headers.update(auth.headers)
-            req_url = auth.apply_to_url(current)
 
         resp = await session.request(
             method,
-            req_url,
+            current,
             allow_redirects=False,
             headers=req_headers,
             timeout=timeout,
@@ -127,7 +122,6 @@ async def open_validated(
     method: str,
     url: str,
     *,
-    credential_id: Optional[str] = None,
     headers: Optional[dict[str, str]] = None,
     timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
 ) -> AsyncIterator[tuple[aiohttp.ClientResponse, str]]:
@@ -137,7 +131,7 @@ async def open_validated(
     query string. The response is released automatically on exit.
     """
     resp, final_url = await _resolve_final_response(
-        method, url, credential_id, dict(headers or {}), timeout
+        method, url, dict(headers or {}), timeout
     )
     try:
         yield resp, final_url
