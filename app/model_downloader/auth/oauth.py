@@ -3,12 +3,19 @@
 The flow, per provider:
 
 1. :func:`start_login_flow` builds a PKCE challenge, binds a loopback callback
-   server on ``127.0.0.1:<port>`` at ``/callback/<provider>``, and returns the
-   provider's authorize URL for the user to open.
+   server on ``127.0.0.1:<CALLBACK_PORT>`` at ``/callback/<provider>``, and
+   returns the provider's authorize URL for the user to open.
 2. The provider redirects the browser back to the loopback URL with a ``code``
    and the ``state`` we generated. The server validates ``state``, exchanges the
    code for a :class:`Token`, hands it to the ``deliver`` sink, and tears down.
 3. If no callback arrives within :data:`_LOGIN_TIMEOUT`, the server tears down.
+
+The callback runs on its own bare server, not ComfyUI's main server: the main
+server rejects cross-site navigations (``Sec-Fetch-Site: cross-site`` → 403),
+and an OAuth redirect from the provider is exactly such a navigation. The port
+is fixed because HuggingFace and Civitai require an exact registered
+``redirect_uri`` (port included); only one login runs at a time so the port
+never contends with itself.
 
 Only public PKCE clients are supported (no client secret). All outbound calls
 go to the provider's own authorize/token endpoints, strictly user-initiated.
@@ -32,12 +39,19 @@ from app.model_downloader.auth.providers import Provider
 from app.model_downloader.auth.token_store import Token
 from app.model_downloader.net.session import get_session, ssl_context
 
-# 0 means "let the OS pick a free loopback port" — RFC 8252 requires providers
-# to accept any port on a loopback redirect, so each concurrent login can bind
-# its own port instead of contending for one fixed port. Pin via env only if a
-# custom OAuth app registered a specific loopback port.
-CALLBACK_PORT = int(os.environ.get("COMFY_OAUTH_CALLBACK_PORT", "0"))
+CALLBACK_HOST = "127.0.0.1"
+# Fixed loopback port for the OAuth redirect. Must match the redirect URI
+# registered on the provider's OAuth app; override in lockstep if you change it.
+CALLBACK_PORT = int(os.environ.get("COMFY_OAUTH_CALLBACK_PORT", "41954"))
 _LOGIN_TIMEOUT = 300.0  # seconds to wait for the browser callback
+
+# The auth tab is opened by the frontend via window.open, so window.close() is
+# allowed here; the visible text is the fallback when the browser blocks it.
+_SUCCESS_HTML = (
+    "<!doctype html><meta charset=utf-8><title>ComfyUI</title>"
+    "<p>Login successful. You can close this window and return to ComfyUI.</p>"
+    "<script>window.close()</script>"
+)
 
 # Token sink: called with the provider name and the exchanged Token.
 TokenSink = Callable[[str, Token], None]
@@ -155,19 +169,22 @@ class _LoginFlow:
         self.deliver = deliver
         self.verifier, self.challenge = _make_pkce()
         self.state = secrets.token_urlsafe(24)
-        self.redirect_uri = ""  # set once the loopback port is bound
+        self.redirect_uri = f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback/{provider.name}"
         self._runner: web.AppRunner | None = None
         self._timeout_handle: asyncio.TimerHandle | None = None
 
     async def start(self) -> str:
         app = web.Application()
-        app.router.add_get(f"/callback/{self.provider.name}", self._handle_callback)
+        app.router.add_get("/callback/{provider}", self._handle_callback)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, "127.0.0.1", CALLBACK_PORT)
-        await site.start()
-        port = site._server.sockets[0].getsockname()[1]
-        self.redirect_uri = f"http://127.0.0.1:{port}/callback/{self.provider.name}"
+        site = web.TCPSite(self._runner, CALLBACK_HOST, CALLBACK_PORT, reuse_address=True)
+        try:
+            await site.start()
+        except OSError as e:
+            await self._runner.cleanup()
+            self._runner = None
+            raise OAuthError(f"could not bind callback port {CALLBACK_PORT}: {e}")
         loop = asyncio.get_running_loop()
         self._timeout_handle = loop.call_later(
             _LOGIN_TIMEOUT, lambda: asyncio.ensure_future(self._teardown())
@@ -177,6 +194,8 @@ class _LoginFlow:
         )
 
     async def _handle_callback(self, request: web.Request) -> web.Response:
+        if request.match_info.get("provider") != self.provider.name:
+            return web.Response(text="Unknown login.", content_type="text/plain", status=404)
         error = request.query.get("error")
         if error:
             asyncio.ensure_future(self._teardown())
@@ -208,10 +227,7 @@ class _LoginFlow:
             )
         self.deliver(self.provider.name, token)
         asyncio.ensure_future(self._teardown())
-        return web.Response(
-            text="Login successful. You can close this window and return to ComfyUI.",
-            content_type="text/plain",
-        )
+        return web.Response(text=_SUCCESS_HTML, content_type="text/html")
 
     async def _teardown(self) -> None:
         _ACTIVE.pop(self.provider.name, None)
@@ -234,14 +250,19 @@ def login_in_progress(provider_name: str) -> bool:
 
 
 async def start_login_flow(provider: Provider, deliver: TokenSink) -> str:
-    """Begin a login flow and return the authorize URL to open in a browser."""
+    """Begin a login flow and return the authorize URL to open in a browser.
+
+    Binds the fixed-port loopback callback server; only one login may run at a
+    time since that port is shared.
+    """
     if not provider.client_id:
         raise OAuthNotConfigured(
             f"OAuth app not configured for {provider.name}; set "
             f"{provider.client_id_env} or use an env API key."
         )
-    if provider.name in _ACTIVE:
-        raise LoginInProgress(f"A login for {provider.name} is already in progress.")
+    if _ACTIVE:
+        active = next(iter(_ACTIVE))
+        raise LoginInProgress(f"A login for {active} is already in progress.")
     flow = _LoginFlow(provider, deliver)
     authorize_url = await flow.start()
     _ACTIVE[provider.name] = flow
