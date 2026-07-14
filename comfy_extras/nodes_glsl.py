@@ -23,7 +23,12 @@ def _preload_angle():
     if sys.platform == "win32":
         angle_dir = comfy_angle.get_lib_dir()
         os.add_dll_directory(angle_dir)
-        os.environ["PATH"] = angle_dir + os.pathsep + os.environ.get("PATH", "")
+        path = os.environ.get("PATH", "")
+        parts = [p.strip() for p in path.split(os.pathsep) if p.strip()]
+        if angle_dir not in parts:
+            parts.insert(0, angle_dir)
+        os.environ["PATH"] = os.pathsep.join(parts)
+        logger.info(f'Normalized Windows PATH with ANGLE dir={angle_dir!r}')
 
     mode = 0 if sys.platform == "win32" else ctypes.RTLD_GLOBAL
     ctypes.CDLL(str(egl_path), mode=mode)
